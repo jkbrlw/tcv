@@ -1,0 +1,144 @@
+# tcv-agent-base
+# Base image for AI agent containers (Claude Code, Codex, etc.)
+# Extend this image and add project-specific tooling.
+#
+# Example usage in derived images:
+#   FROM localhost/tcv-agent-base:latest
+#   RUN apt-get update && apt-get install -y php8.3-cli composer ...
+
+FROM debian:bookworm-slim
+
+# =============================================================================
+# Core utilities
+# =============================================================================
+# - git: version control
+# - jq: JSON processing
+# - curl/wget/ca-certificates: HTTP tools
+# - tmux + bsdutils (script): headless PTY support for agent sessions
+# - build-essential: common build tools
+RUN apt-get update && apt-get install -y --no-install-recommends \
+      git jq curl wget ca-certificates \
+      tmux bsdutils \
+      build-essential \
+      procps \
+  && apt-get clean && rm -rf /var/lib/apt/lists/*
+
+# =============================================================================
+# Node.js (for Claude Code and Codex CLIs)
+# =============================================================================
+ARG NODE_VERSION=20
+RUN curl -fsSL https://deb.nodesource.com/setup_${NODE_VERSION}.x | bash - \
+  && apt-get install -y nodejs \
+  && apt-get clean && rm -rf /var/lib/apt/lists/*
+
+# =============================================================================
+# Non-root agent user (generic for claude, codex, aider, etc.)
+# =============================================================================
+RUN useradd -u 10001 -m agent
+
+# =============================================================================
+# AI Agent CLIs (install to /opt so they survive home dir mounts)
+# =============================================================================
+# Install globally to /opt/agent-cli which won't be shadowed by volume mounts
+ENV NPM_CONFIG_PREFIX=/opt/agent-cli
+ENV PATH="/opt/agent-cli/bin:${PATH}"
+ENV HOME=/home/agent
+RUN mkdir -p /opt/agent-cli && chown 10001:10001 /opt/agent-cli
+
+# Cache bust arg - always fetch latest agent versions
+# Build command passes current timestamp to ensure fresh install
+ARG AGENT_CACHE_BUST
+USER 10001:10001
+RUN npm install -g @anthropic-ai/claude-code @openai/codex @google/gemini-cli
+ENV PATH="/opt/agent-cli/bin:${PATH}"
+
+WORKDIR /work
+
+# =============================================================================
+# Git wrapper - block pushes to protected branches
+# =============================================================================
+USER root
+RUN cp /usr/bin/git /usr/bin/git.bin && \
+    printf '%s\n' '#!/usr/bin/env bash' \
+'cmd="$1"' \
+'shift || true' \
+'case "$cmd" in' \
+'  push|send-pack)' \
+'    # Check if pushing to protected branch' \
+'    for arg in "$@"; do' \
+'      case "$arg" in' \
+'        *master*|*main*|*develop*|refs/heads/master|refs/heads/main|refs/heads/develop)' \
+'          echo "[blocked] git $cmd to protected branch is disabled" >&2' \
+'          exit 2' \
+'          ;;' \
+'      esac' \
+'    done' \
+'    ;;' \
+'  request-pull)' \
+'    echo "[blocked] git $cmd is disabled in this sandbox" >&2' \
+'    exit 2' \
+'    ;;' \
+'  remote)' \
+'    if [ "${1:-}" = "set-url" ] && { [ "${2:-}" = "--push" ] || [ "${2:-}" = "--add" ]; }; then' \
+'      echo "[blocked] modifying pushurl is disabled" >&2' \
+'      exit 2' \
+'    fi' \
+'    ;;' \
+'esac' \
+'exec /usr/bin/git.bin "$cmd" "$@"' > /usr/bin/git && chmod +x /usr/bin/git
+
+# =============================================================================
+# NPM wrapper - block heavy commands, direct to npm-host MCP tool
+# =============================================================================
+RUN mv /usr/bin/npm /usr/bin/npm.bin && \
+    printf '%s\n' '#!/usr/bin/env bash' \
+'# Blocked npm scripts - these should use the npm-host MCP tool' \
+'BLOCKED_SCRIPTS="build dev start test preview generate typecheck check"' \
+'' \
+'if [ "$1" = "run" ] || [ "$1" = "run-script" ]; then' \
+'  script="$2"' \
+'  for blocked in $BLOCKED_SCRIPTS; do' \
+'    if [ "$script" = "$blocked" ]; then' \
+'      echo "" >&2' \
+'      echo "[blocked] npm run $script is disabled in this container due to memory limits" >&2' \
+'      echo "" >&2' \
+'      echo "Use the npm-host MCP tool instead:" >&2' \
+'      echo "  Tool: npm_run" >&2' \
+'      echo "  Args: { \"project\": \"$(basename $PWD)\", \"script\": \"$script\" }" >&2' \
+'      echo "" >&2' \
+'      exit 1' \
+'    fi' \
+'  done' \
+'fi' \
+'' \
+'if [ "$1" = "test" ]; then' \
+'  echo "" >&2' \
+'  echo "[blocked] npm test is disabled in this container due to memory limits" >&2' \
+'  echo "" >&2' \
+'  echo "Use the npm-host MCP tool instead:" >&2' \
+'  echo "  Tool: npm_test" >&2' \
+'  echo "  Args: { \"project\": \"$(basename $PWD)\" }" >&2' \
+'  echo "" >&2' \
+'  exit 1' \
+'fi' \
+'' \
+'exec /usr/bin/npm.bin "$@"' > /usr/bin/npm && chmod +x /usr/bin/npm
+
+# =============================================================================
+# Terminal title helper - updates window title with project @ branch
+# Writes to all writable /dev/pts/* to bypass Claude Code's output capture
+# =============================================================================
+RUN printf '%s\n' '#!/bin/bash' \
+'TITLE="${TCV_PROJECT:-$(basename "$PWD")} @ $(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo -)"' \
+'for tty in /dev/pts/*; do' \
+'  [[ "$tty" =~ ^/dev/pts/[0-9]+$ ]] && [[ -w "$tty" ]] && printf '"'"'\033]0;%s\007'"'"' "$TITLE" > "$tty" 2>/dev/null' \
+'done' \
+> /usr/local/bin/update-title && chmod +x /usr/local/bin/update-title
+
+# =============================================================================
+# Entrypoint
+# =============================================================================
+COPY --chmod=755 entrypoint.sh /usr/local/bin/entrypoint.sh
+
+USER 10001:10001
+ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]

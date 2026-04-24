@@ -1,0 +1,12 @@
+# Binary
+tcv
+
+# Project runtime files (written by CLI into project directories)
+.container_id
+.session_id
+.mcp.json
+.tcv/
+
+# OS
+.DS_Store
+Thumbs.db

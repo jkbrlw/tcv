@@ -1,0 +1,12 @@
+{
+  "name": "agent-egress-proxy",
+  "version": "1.0.0",
+  "description": "Logging proxy for agent network access",
+  "main": "proxy.js",
+  "scripts": {
+    "start": "node proxy.js"
+  },
+  "dependencies": {
+    "http-proxy": "^1.18.1"
+  }
+}

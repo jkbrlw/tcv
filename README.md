@@ -2,7 +2,7 @@
 
 Run AI coding agents (Claude Code, Codex, Gemini) in sandboxed containers with network policy enforcement.
 
-Each agent session gets its own Podman/Docker container with controlled internet access, resource limits, and project isolation. TCV manages the full lifecycle: image building, proxy setup, session start/stop, log tailing, and crash recovery.
+> **A starting point, not a finished product.** TCV handles the container plumbing — image builds, network filtering, session lifecycle, crash recovery — so you can focus on the hard parts: orchestration strategy, prompt engineering, CI integration, and figuring out what "agentic engineering" actually means for your team. On its own, TCV is a useful tool for running agents safely. But a real production harness needs scheduling, state management, review workflows, and a lot of opinions this repo intentionally doesn't have. If you're building that layer (or trying to figure out what it should look like), I'm happy to help — reach out for consulting or just to talk through your approach. [jake@jakebarlow.com](mailto:jake@jakebarlow.com)
 
 ## Quick Start
 

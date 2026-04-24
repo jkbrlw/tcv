@@ -1,20 +1,47 @@
-# TCV CLI
+# TCV
 
-A standalone command-line tool for running AI coding agents (Claude Code, Codex, Gemini) inside sandboxed Podman/Docker containers with network policy enforcement.
+Run AI coding agents (Claude Code, Codex, Gemini) in sandboxed containers with network policy enforcement.
 
-Each agent session gets its own container with controlled internet access, resource limits, and project isolation. The CLI manages the full lifecycle: image building, proxy setup, session start/stop, log tailing, and crash recovery.
+Each agent session gets its own Podman/Docker container with controlled internet access, resource limits, and project isolation. TCV manages the full lifecycle: image building, proxy setup, session start/stop, log tailing, and crash recovery.
+
+## Quick Start
+
+```bash
+git clone https://github.com/yourusername/tcv.git
+cd tcv
+make install        # Build + install to /usr/local/bin
+make build-base     # Build the base agent container image
+make build-proxy    # Build the egress proxy image
+```
+
+Then for any project:
+
+```bash
+cd ~/projects/myapp
+tcv init                # Create .tcv.json config
+tcv proxy start         # Start the network filtering proxy
+tcv claude              # Launch Claude Code in a container
+```
+
+## Make Targets
+
+| Target | Description |
+|--------|-------------|
+| `make build` | Build the `tcv` binary to `cli/tcv` |
+| `make install` | Build and install to `/usr/local/bin/tcv` |
+| `make build-base` | Build `tcv-agent-base` container image (Debian + Node + agent CLIs) |
+| `make build-proxy` | Build `tcv-egress` container image (filtering HTTP proxy) |
+| `make build-images` | Build all images (base + proxy + any custom images in `images-custom/`) |
+| `make clean` | Remove build artifacts |
 
 ## Dependencies
-
-### Required
 
 | Dependency | Version | Purpose |
 |-----------|---------|---------|
 | **Go** | 1.21+ | Build the CLI binary |
 | **Podman** or **Docker** | Podman 4+ / Docker 24+ | Container runtime |
-| **Node.js** | 20+ | Required inside agent containers (for Claude Code, Codex, Gemini CLIs) |
 
-### API Keys (at least one)
+You also need at least one API key, set in your shell profile or an env file:
 
 | Variable | Agent |
 |----------|-------|
@@ -22,92 +49,64 @@ Each agent session gets its own container with controlled internet access, resou
 | `OPENAI_API_KEY` | Codex |
 | Google OAuth (interactive) | Gemini |
 
-These are passed into containers automatically. Set them in your shell profile or an env file.
-
-### Optional
-
-| Dependency | Purpose |
-|-----------|---------|
-| **tmux** | Installed in containers by the base image; used for headless sessions |
-
 ## Installation
 
-### Quick Start
+### From Source
 
 ```bash
-# Clone and build
 git clone https://github.com/yourusername/tcv.git
-cd tcv/cli
-go build -o tcv .
-
-# Install to PATH
-sudo cp tcv /usr/local/bin/
+cd tcv
+make install
 ```
 
-The CLI is a single Go binary with one dependency (`golang.org/x/term`). The resulting binary is fully self-contained — copy it anywhere.
+This builds a single Go binary (one dependency: `golang.org/x/term`) and copies it to `/usr/local/bin/tcv`.
 
 ### Set TCV_ROOT
 
-The CLI needs to know where to find container image definitions and the baseline network policy. Set `TCV_ROOT` to the repo checkout:
+TCV needs to find the container image definitions and baseline network policy. Set `TCV_ROOT` to the repo checkout:
 
 ```bash
+# Add to your shell profile
 export TCV_ROOT=/path/to/tcv
 ```
 
-If unset, it defaults to `/usr/local/share/tcv`. You can symlink the repo there:
+If unset, it defaults to `/usr/local/share/tcv`. You can symlink the repo there instead:
 
 ```bash
 sudo ln -s /path/to/tcv /usr/local/share/tcv
 ```
 
-### Install Agent Configuration
+### Agent Configuration (Optional)
 
-The CLI loads agent mount configs from (in priority order):
+TCV loads agent configs from (in priority order):
 
-1. **Global**: `$TCV_ROOT/config/agents.json`
-2. **User**: `~/.config/tcv/agents.json`
+1. **Global**: `$TCV_ROOT/config/agents.json` (ships with the repo)
+2. **User**: `~/.config/tcv/agents.json` (your overrides)
 
-Copy the default config to the user location for customization:
+The defaults work out of the box. To customize agent flags, git identity, or history mounts:
 
 ```bash
 mkdir -p ~/.config/tcv
 cp config/agents.json ~/.config/tcv/agents.json
 ```
 
-This file defines how each agent's config directory (`.claude/`, `.codex/`, `.gemini/`) is mounted into containers, which history files persist between sessions, and the git identity for each agent.
-
 ## Setup
 
 ### 1. Build Container Images
 
-The base image installs Node.js, Claude Code, Codex, and Gemini CLIs into a Debian container:
-
 ```bash
-# Build the base image (required)
-tcv build tcv-agent-base
-
-# Build the egress proxy (required for network filtering)
-tcv build tcv-egress
-
-# Build project-specific images (extend the base with your toolchain)
-tcv build --all
-
-# List available images
-tcv build --list
+make build-base     # Required — base image with Node.js + agent CLIs
+make build-proxy    # Required — egress network proxy
+make build-images   # Optional — also builds any custom images in images-custom/
 ```
 
 ### 2. Start the Egress Proxy
 
-The egress proxy is a filtering HTTP proxy that controls which hosts agent containers can reach:
-
 ```bash
 tcv proxy start
-tcv proxy status
 ```
 
-The proxy runs as a Podman container (`tcv-egress`) and filters outbound traffic based on per-project allow lists defined in `.tcv.json`. A baseline policy (`images/tcv-egress/baseline-policy.json`) always permits core AI API hosts (anthropic.com, openai.com, github.com, etc.).
-
-Skip the proxy with `--no-proxy` if you want unfiltered internet access.
+The proxy filters outbound traffic per project. Core hosts (GitHub, npm, Anthropic, OpenAI, Google) are always allowed. Skip it with `--no-proxy` for unfiltered access.
 
 ### 3. Initialize a Project
 
@@ -116,44 +115,29 @@ cd ~/projects/myapp
 tcv init
 ```
 
-This creates `.tcv.json` in your project root:
+This creates `.tcv.json` with auto-detected project type. You can also pass a path:
 
-```json
-{
-  "project_name": "myapp",
-  "image_type": "agent-laravel-vcs",
-  "resources": {
-    "memory": "2g",
-    "cpus": "2",
-    "pids_limit": "256"
-  },
-  "mounts": [],
-  "local_domains": [],
-  "local_ports": [],
-  "hooks": {
-    "session.started": {
-      "command": "echo \"Started $TCV_PROJECT\" >> /tmp/tcv.log",
-      "timeout": 5
-    }
-  }
-}
+```bash
+tcv init ~/projects/myapp
 ```
-
-The `init` command auto-detects your project type and suggests an appropriate container image.
 
 ### 4. Run an Agent
 
+**All commands default to the current directory.** You can `cd` into any project and run commands directly — no path argument needed:
+
 ```bash
-# Interactive session (attaches to terminal)
-tcv claude
-tcv codex ~/projects/myapp
-tcv gemini .
+cd ~/projects/myapp
+tcv claude              # Start Claude Code
+tcv status              # Check if container is running
+tcv logs -f             # Follow live output
+tcv stop                # Stop the session
+```
 
-# Headless (runs in background with tmux)
-tcv claude --headless
+Or pass a path explicitly:
 
-# Batch mode (non-interactive, runs prompt and exits)
-tcv claude --batch --prompt "Fix the failing tests in auth_test.go"
+```bash
+tcv claude ~/projects/myapp
+tcv stop ~/projects/myapp
 ```
 
 ## Usage
@@ -162,31 +146,33 @@ tcv claude --batch --prompt "Fix the failing tests in auth_test.go"
 tcv <command> [options] [project-dir]
 ```
 
+**All commands default to the current working directory** when no `project-dir` is given. `cd` into your project and run commands directly.
+
 ### Session Commands
 
 | Command | Description |
 |---------|-------------|
-| `tcv claude [dir]` | Start a Claude Code session |
-| `tcv codex [dir]` | Start a Codex session |
-| `tcv gemini [dir]` | Start a Gemini session |
+| `tcv claude` | Start a Claude Code session |
+| `tcv codex` | Start a Codex session |
+| `tcv gemini` | Start a Gemini session |
 
 ### Management Commands
 
 | Command | Description |
 |---------|-------------|
-| `tcv stop [dir]` | Gracefully stop the session container |
-| `tcv kill [dir]` | Force-kill the session container |
-| `tcv status [dir]` | Check container state (running/stopped/exited) |
-| `tcv logs [dir]` | Tail session output logs |
-| `tcv attach [dir]` | Attach to tmux inside a running container |
-| `tcv reconnect [dir]` | Reconnect to a crashed session (restarts if dead) |
+| `tcv stop` | Gracefully stop the session container |
+| `tcv kill` | Force-kill the session container |
+| `tcv status` | Check container state (running/stopped/exited) |
+| `tcv logs` | Tail session output logs |
+| `tcv attach` | Attach to tmux inside a running container |
+| `tcv reconnect` | Reconnect to a crashed session (restarts if dead) |
 
 ### Setup Commands
 
 | Command | Description |
 |---------|-------------|
-| `tcv init [dir]` | Initialize project with `.tcv.json` |
-| `tcv reload [dir]` | Push updated `.tcv.json` to the running proxy |
+| `tcv init` | Initialize project with `.tcv.json` |
+| `tcv reload` | Push updated `.tcv.json` to the running proxy |
 | `tcv baseline` | View or update the proxy's baseline network policy |
 | `tcv proxy start\|stop\|status` | Manage the egress proxy container |
 | `tcv build [image]` | Build container images |
@@ -208,37 +194,44 @@ tcv <command> [options] [project-dir]
 ### Examples
 
 ```bash
-# Day-to-day usage
-tcv claude                          # Start Claude in current directory
-tcv codex ~/projects/api            # Start Codex in a specific project
-tcv stop                            # Stop the running session
-tcv logs -f                         # Follow live output
+# Typical workflow — cd into your project, run everything from there
+cd ~/projects/myapp
+tcv init                                # One-time setup
+tcv claude                              # Start Claude
+tcv logs -f                             # Follow output in another terminal
+tcv stop                                # Done for now
 
-# Batch automation
-tcv claude --batch --prompt "Refactor the auth module to use JWT"
+# Batch automation (non-interactive)
+cd ~/projects/api
+tcv claude --batch --prompt "Fix the failing tests in auth_test.go"
 tcv codex --batch --prompt "Add unit tests for user_service.go"
 
+# Or specify paths explicitly
+tcv claude ~/projects/myapp
+tcv status ~/projects/myapp
+tcv stop ~/projects/myapp
+
 # Debugging
-tcv status                          # Is the container running?
-tcv attach                          # Drop into tmux (Ctrl-b d to detach)
-tcv reconnect                       # Recover from terminal crash
+tcv status                              # Is the container running?
+tcv attach                              # Drop into tmux (Ctrl-b d to detach)
+tcv reconnect                           # Recover from terminal crash
 
 # Image management
-tcv build --list                    # See available images
-tcv build tcv-agent-base        # Rebuild the base image
-tcv build --all                     # Build everything
+tcv build --list                        # See available images
+tcv build tcv-agent-base                # Rebuild the base image
+tcv build --all                         # Build everything
 
 # Network policy
-tcv proxy start                     # Start the egress proxy
-tcv reload                          # Reload .tcv.json after editing
-tcv baseline --reload               # Push updated baseline to proxy
+tcv proxy start                         # Start the egress proxy
+tcv reload                              # Reload .tcv.json after editing allow_hosts
+tcv baseline --reload                   # Push updated baseline to proxy
 ```
 
 ## Project Configuration
 
 Each project needs a `.tcv.json` in its root. Create one with `tcv init` or write it by hand.
 
-### Minimal Configuration
+### Minimal
 
 ```json
 {
@@ -247,7 +240,7 @@ Each project needs a `.tcv.json` in its root. Create one with `tcv init` or writ
 }
 ```
 
-### Full Configuration
+### Full
 
 ```json
 {
@@ -263,10 +256,11 @@ Each project needs a `.tcv.json` in its root. Create one with `tcv init` or writ
   ],
   "local_domains": ["myapp.local", "api.myapp.local"],
   "local_ports": [8000, 5173, 3306],
-  "mcp_host": { "url": "http://mcp-server.local:3847" },
-  "preview": {
-    "Frontend": "https://myapp.example.com",
-    "API": "https://api.myapp.example.com"
+  "network": {
+    "allow_hosts": [
+      "api.myservice.com:443",
+      "registry.npmjs.org:443"
+    ]
   },
   "hooks": {
     "session.started": {
@@ -282,7 +276,7 @@ Each project needs a `.tcv.json` in its root. Create one with `tcv init` or writ
 
 ### Resource Limits
 
-Defaults if not specified in `.tcv.json`:
+Defaults if not specified:
 
 | Resource | Default | Notes |
 |----------|---------|-------|
@@ -293,21 +287,9 @@ Defaults if not specified in `.tcv.json`:
 
 ### Network Policy
 
-The `network` section in `.tcv.json` controls which hosts the agent can reach through the egress proxy:
+The `network.allow_hosts` list in `.tcv.json` controls which hosts the agent can reach. Core AI and dev hosts (GitHub, npm, Anthropic, OpenAI, Google) are always allowed via the baseline policy.
 
-```json
-{
-  "network": {
-    "allow_hosts": [
-      "github.com:443",
-      "api.myservice.com:443",
-      "registry.npmjs.org:443"
-    ]
-  }
-}
-```
-
-Core AI/dev hosts (GitHub, npm, Anthropic, OpenAI, Google) are always allowed via the baseline policy.
+Edit `.tcv.json` and run `tcv reload` to apply changes without restarting the session.
 
 ## Container Images
 
@@ -332,11 +314,11 @@ Name the directory `agent-<stack>-vcs` (e.g., `agent-laravel-vcs`). Reference it
 
 ## Lifecycle Hooks
 
-Hooks are shell commands that run at session lifecycle events. They receive session metadata as JSON on stdin and as environment variables. Hooks run asynchronously and never block the CLI.
+Hooks are shell commands that fire at session lifecycle events. They run asynchronously and never block the CLI.
 
 ### Configuration
 
-**User-level** (`~/.config/tcv/hooks.json`) -- applies to all projects:
+**User-level** (`~/.config/tcv/hooks.json`) — applies to all projects:
 
 ```json
 {
@@ -350,30 +332,20 @@ Hooks are shell commands that run at session lifecycle events. They receive sess
 }
 ```
 
-**Project-level** (`.tcv.json` `hooks` field) -- overrides user-level for that project:
-
-```json
-{
-  "project_name": "myapp",
-  "image_type": "tcv-agent-base",
-  "hooks": {
-    "session.started": {
-      "command": "echo $TCV_SESSION_ID >> /tmp/sessions.log"
-    }
-  }
-}
-```
+**Project-level** (`.tcv.json` `hooks` field) — overrides user-level per project.
 
 ### Events
 
 | Event | Fires When |
 |-------|-----------|
-| `session.started` | Container starts. For interactive sessions, fires before the terminal attaches. For headless/batch, fires after container status is known. |
-| `session.stopped` | Interactive session exits (user quit or agent finished). Does not fire for headless sessions since the container keeps running. |
+| `session.started` | Container starts. Interactive: before terminal attaches. Headless/batch: after container status is known. |
+| `session.stopped` | Interactive session exits. Does not fire for headless sessions (container keeps running). |
 
 ### Hook Payload
 
-**stdin** receives the full event as JSON:
+Hooks receive session data two ways:
+
+**stdin** — full JSON:
 
 ```json
 {
@@ -393,7 +365,7 @@ Hooks are shell commands that run at session lifecycle events. They receive sess
 }
 ```
 
-**Environment variables** are also set:
+**Environment variables**:
 
 | Variable | Example |
 |----------|---------|
@@ -406,8 +378,9 @@ Hooks are shell commands that run at session lifecycle events. They receive sess
 | `TCV_STATUS` | `running` |
 | `TCV_GIT_BRANCH` | `feature/auth` |
 
-### Example: Slack Notification
+### Hook Examples
 
+**Slack notification:**
 ```json
 {
   "session.started": {
@@ -417,10 +390,7 @@ Hooks are shell commands that run at session lifecycle events. They receive sess
 }
 ```
 
-### Example: POST to an API
-
-Register sessions with your own dashboard or monitoring system:
-
+**POST to an API** (stdin JSON piped as request body):
 ```json
 {
   "session.started": {
@@ -430,16 +400,14 @@ Register sessions with your own dashboard or monitoring system:
 }
 ```
 
-The full session JSON is piped to stdin, so `-d @-` sends it as the POST body.
-
 ## Agent Configuration
 
-The `agents.json` file defines how each AI agent's config and history directories are mounted into containers.
+The `agents.json` file defines how each agent's config directory is mounted into containers.
 
 ### Default Agents
 
-| Agent | CLI Command | Config Dir | History Persisted |
-|-------|------------|------------|------------------|
+| Agent | Command | Config Dir | History Persisted |
+|-------|---------|------------|------------------|
 | Claude | `claude --dangerously-skip-permissions` | `~/.claude/` | `history.jsonl`, `projects/`, `todos/`, `session-env/`, `plans/` |
 | Codex | `codex --full-auto` | `~/.codex/` | `history.jsonl`, `sessions/`, `log/` |
 | Gemini | `gemini` | `~/.gemini/` | (OAuth creds only) |
@@ -467,7 +435,7 @@ Add an entry to `~/.config/tcv/agents.json`:
 
 ### Mounting Host Tools
 
-Add tools to be mounted read-only into every container:
+Mount scripts or binaries read-only into every container:
 
 ```json
 {
@@ -502,13 +470,13 @@ myapp/
   .gemini/              # Gemini history (standard location)
 ```
 
-Session files older than 7 days are cleaned up automatically on each `tcv claude/codex/gemini` start.
+Session files older than 7 days are cleaned up automatically.
 
 ## Environment Variables
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `TCV_ROOT` | `/usr/local/share/tcv` | Path to tcv repo (images, config, baseline policy) |
+| `TCV_ROOT` | `/usr/local/share/tcv` | Path to the TCV repo (images, config, baseline policy) |
 | `TCV_PROXY_PORT` | `8080` | Egress proxy listen port |
 | `TCV_CONTAINER_RUNTIME` | auto-detect | Force `podman` or `docker` |
 | `ANTHROPIC_API_KEY` | | API key for Claude Code |
@@ -520,96 +488,72 @@ Session files older than 7 days are cleaned up automatically on each `tcv claude
 ### Container won't start
 
 ```bash
-# Check if the image exists
-tcv build --list
-podman images | grep agent
-
-# Check if proxy is running (required unless --no-proxy)
-tcv proxy status
-
-# Try without proxy to isolate the issue
-tcv claude --no-proxy
+tcv build --list              # Is the image built?
+podman images | grep agent    # Is it visible to podman?
+tcv proxy status              # Is the proxy running?
+tcv claude --no-proxy         # Try without proxy to isolate
 ```
 
-### Session crashes
+### Session crashes or OOM
 
 ```bash
-# Check container state
 tcv status
-
-# Check for OOM kill
 podman inspect $(cat .container_id) --format '{{.State.OOMKilled}} {{.State.Status}}'
+tcv reconnect                 # Restart + reattach (Claude history preserved)
+```
 
-# Increase memory in .tcv.json
-# "resources": { "memory": "4g", "pids_limit": "512" }
-
-# Reconnect (preserves Claude history for /resume)
-tcv reconnect
+Increase resources in `.tcv.json`:
+```json
+{ "resources": { "memory": "4g", "pids_limit": "512" } }
 ```
 
 ### Agent can't reach a host
 
 ```bash
-# Check current policy
-cat .tcv.json | jq '.network'
-
-# Add the host
-# "network": { "allow_hosts": ["api.example.com:443"] }
-
-# Reload without restarting
-tcv reload
-
-# Check baseline policy
-tcv baseline
+cat .tcv.json | jq '.network'           # Check your allow list
+# Add "api.example.com:443" to network.allow_hosts
+tcv reload                               # Apply without restarting
 ```
 
 ### "Text file busy" on install
 
 ```bash
-# Stop any running sessions first
-tcv stop
-
-# Then install
-sudo rm -f /usr/local/bin/tcv
-sudo cp cli/tcv /usr/local/bin/tcv
+tcv stop                                 # Stop running sessions first
+sudo rm -f /usr/local/bin/tcv && sudo cp cli/tcv /usr/local/bin/tcv
 ```
 
 ## Architecture
 
-The CLI is a single-file Go binary (`cli/main.go`, ~3500 lines) with one external dependency (`golang.org/x/term`). It makes zero HTTP calls — all external integration is handled through configurable lifecycle hooks.
-
 ```
 tcv CLI
     │
-    ├── reads .tcv.json          (per-project config)
-    ├── reads ~/.config/tcv/     (user config: agents.json, hooks.json)
-    ├── reads $TCV_ROOT/         (image definitions, baseline policy)
+    ├── reads .tcv.json              per-project config
+    ├── reads ~/.config/tcv/         user config (agents.json, hooks.json)
+    ├── reads $TCV_ROOT/             image definitions, baseline policy
     │
-    ├── manages Podman/Docker        (container lifecycle)
-    ├── manages egress proxy         (network filtering)
-    ├── writes .tcv/sessions/    (session logs, metadata)
+    ├── manages Podman/Docker        container lifecycle
+    ├── manages tcv-egress           network filtering proxy
+    ├── writes .tcv/sessions/        session logs, metadata
     │
-    └── fires lifecycle hooks        (shell commands, async, non-blocking)
+    └── fires lifecycle hooks        shell commands, async, non-blocking
 ```
 
 ### Repository Structure
 
 ```
-cli/                         # Go source code
+cli/                         # Go source code (single file + go.mod)
 config/
   agents.json                # Agent mount/history configuration
   hooks.json.example         # Example lifecycle hooks
 images/
-  tcv-agent-base/        # Base container image (Debian + Node + agent CLIs)
-  tcv-egress/            # Egress proxy image (Node.js HTTP proxy)
+  tcv-agent-base/            # Base container image (Debian + Node + agent CLIs)
+  tcv-egress/                # Egress proxy image (Node.js HTTP proxy)
 images-custom/               # Project-specific images (extend the base)
 ```
 
 ## Contributing
 
 Contributions are welcome. Please open an issue to discuss before submitting large changes.
-
-When adding a new agent, add its config to `config/agents.json` and document it in this README.
 
 ## License
 

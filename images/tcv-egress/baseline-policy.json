@@ -1,0 +1,30 @@
+{
+  "comment": "Baseline policy - always loaded for all agent containers. Add your own hosts to per-project .tcv.json network.allow_hosts.",
+  "network": {
+    "allow_hosts": [
+      "registry.npmjs.org:443",
+      "registry.npmjs.org:80",
+      "api.anthropic.com:443",
+      "statsig.anthropic.com:443",
+      "console.anthropic.com:443",
+      "claude.ai:443",
+      "platform.claude.com:443",
+      "statsigapi.net:443",
+      "api.openai.com:443",
+      "chatgpt.com:443",
+      "auth.openai.com:443",
+      "github.com:443",
+      "api.github.com:443",
+      "codeload.github.com:443",
+      "raw.githubusercontent.com:443",
+      "cdn.playwright.dev:443",
+      "oauth2.googleapis.com:443",
+      "generativelanguage.googleapis.com:443",
+      "accounts.google.com:443",
+      "cloudcode-pa.googleapis.com:443",
+      "play.googleapis.com:443"
+    ]
+  },
+  "local_domains": [],
+  "local_ports": [80, 443, 3000, 5173, 8000, 8080]
+}

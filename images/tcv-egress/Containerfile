@@ -1,0 +1,18 @@
+FROM node:20-alpine
+
+WORKDIR /app
+
+COPY package.json .
+RUN npm install --production
+
+COPY proxy.js .
+COPY baseline-policy.json .
+RUN chmod +x proxy.js && chmod 666 baseline-policy.json
+
+RUN mkdir -p /logs && chmod 777 /logs
+
+USER node
+
+EXPOSE 8080
+
+CMD ["node", "proxy.js"]

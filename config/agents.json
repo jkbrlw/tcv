@@ -1,0 +1,60 @@
+{
+  "$schema": "./agents.schema.json",
+  "comment": "Default agent configurations for TCV. User overrides: ~/.config/tcv/agents.json. The entire config_dir is mounted rw, with history_mounts overlaid per-project. git_name/git_email set commit identity.",
+  "tools": [],
+  "agents": {
+    "claude": {
+      "command": "claude",
+      "args": ["--dangerously-skip-permissions"],
+      "git_name": "Claude Code",
+      "git_email": "claude@agent.local",
+      "config_dir": ".claude",
+      "container_path": "/home/agent/.claude",
+      "history_mounts": [
+        "history.jsonl",
+        "projects/",
+        "todos/",
+        "session-env/",
+        "file-history/",
+        "shell-snapshots/",
+        "plans/",
+        "debug/"
+      ]
+    },
+    "codex": {
+      "command": "codex",
+      "args": ["--full-auto"],
+      "git_name": "Codex Agent",
+      "git_email": "codex@agent.local",
+      "config_dir": ".codex",
+      "container_path": "/home/agent/.codex",
+      "history_mounts": [
+        "history.jsonl",
+        "sessions/",
+        "log/"
+      ]
+    },
+    "gemini": {
+      "command": "gemini",
+      "args": [],
+      "git_name": "Gemini Agent",
+      "git_email": "gemini@agent.local",
+      "config_dir": ".gemini",
+      "container_path": "/home/agent/.gemini",
+      "history_mounts": []
+    },
+    "aider": {
+      "command": "aider",
+      "args": ["--yes", "--no-git"],
+      "git_name": "Aider Agent",
+      "git_email": "aider@agent.local",
+      "config_dir": ".aider",
+      "container_path": "/home/agent/.aider",
+      "history_mounts": [
+        ".aider.chat.history.md",
+        ".aider.input.history",
+        "cache/"
+      ]
+    }
+  }
+}

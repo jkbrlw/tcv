@@ -1,0 +1,11 @@
+{
+  "comment": "Example hooks configuration. Copy to ~/.config/tcv/hooks.json to activate.",
+  "session.started": {
+    "command": "echo \"[$(date)] Started $TCV_AGENT_TYPE on $TCV_PROJECT ($TCV_GIT_BRANCH)\" >> /tmp/tcv-sessions.log",
+    "timeout": 5
+  },
+  "session.stopped": {
+    "command": "echo \"[$(date)] Stopped $TCV_SESSION_ID\" >> /tmp/tcv-sessions.log",
+    "timeout": 5
+  }
+}

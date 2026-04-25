@@ -1,4 +1,4 @@
-.PHONY: build install build-base build-proxy build-images clean
+.PHONY: build install build-base build-proxy build-images clean help
 
 build: ## Build the tcv CLI
 	cd cli && go build -o tcv .
@@ -10,13 +10,13 @@ install: build ## Install CLI to /usr/local/bin
 	sudo cp cli/tcv /usr/local/bin/tcv
 	@echo "Installed tcv to /usr/local/bin"
 
-build-base: ## Build the base agent container image
+build-base: install ## Build the base agent container image (requires tcv installed)
 	tcv build tcv-agent-base
 
-build-proxy: ## Build the egress proxy container image
+build-proxy: install ## Build the egress proxy container image (requires tcv installed)
 	tcv build tcv-egress
 
-build-images: ## Build all container images (base + proxy + custom)
+build-images: install ## Build all container images (requires tcv installed)
 	tcv build --all
 
 clean: ## Remove build artifacts

@@ -1,5 +1,4 @@
 {
-  "$schema": "./agents.schema.json",
   "comment": "Default agent configurations for TCV. User overrides: ~/.config/tcv/agents.json. The entire config_dir is mounted rw, with history_mounts overlaid per-project. git_name/git_email set commit identity.",
   "tools": [],
   "agents": {

@@ -122,9 +122,9 @@ func runHook(hook *hookConfig, event sessionEvent) {
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
 
 	go func() {
-		defer cancel()
 		cmd := exec.CommandContext(ctx, "sh", "-c", hook.Command)
 		cmd.Stdin = bytes.NewReader(payload)
 		cmd.Env = append(os.Environ(),
@@ -768,12 +768,10 @@ func run(args []string) error {
 		return sessionTypeCommand("claude", args[1:])
 	case "codex":
 		return sessionTypeCommand("codex", args[1:])
-	case "gastown":
-		return sessionTypeCommand("gastown", args[1:])
 
 	// Legacy start command (retired)
 	case "start":
-		return fmt.Errorf("'tcv start' has been retired. Use 'tcv claude', 'tcv codex', or 'tcv gastown' instead")
+		return fmt.Errorf("'tcv start' has been retired. Use 'tcv claude', 'tcv codex', instead")
 	case "stop":
 		return stopCommand(args[1:])
 	case "kill":
@@ -821,7 +819,7 @@ func runSession(args []string) error {
 
 	switch args[0] {
 	case "start":
-		return fmt.Errorf("'tcv session start' has been retired. Use 'tcv claude', 'tcv codex', or 'tcv gastown' instead")
+		return fmt.Errorf("'tcv session start' has been retired. Use 'tcv claude', 'tcv codex', instead")
 	case "stop":
 		return stopCommand(args[1:])
 	case "kill":
@@ -887,7 +885,7 @@ func sessionTypeCommand(sessionType string, args []string) error {
 }
 
 // startSessionWithType is the unified session start implementation.
-// sessionType specifies which session config to use (e.g., "claude", "gastown").
+// sessionType specifies which session config to use (e.g., "claude", "codex").
 // cmdOverride allows overriding the command from the session config.
 func startSessionWithType(sessionType, projectDir, projectName, cmdOverride, envFile,
 	policyOverride string, timeout time.Duration, headless bool, sessionLogDir string, noProxy bool, batch bool, batchPrompt string) error {
@@ -1031,15 +1029,15 @@ func startSessionWithType(sessionType, projectDir, projectName, cmdOverride, env
 		agentCmd = agentCmd + " --session-id " + sessionID
 	}
 
-	// Batch mode: pass prompt to Claude via -p flag for non-interactive execution
+	// Batch mode: pass prompt via environment variable to avoid shell injection
+	var batchPromptEnv string
 	if batch && resolvedSessionType == "claude" {
 		prompt := batchPrompt
 		if prompt == "" {
 			prompt = defaultBatchPrompt
 		}
-		// Shell-escape the prompt for safe embedding in the command
-		escaped := strings.ReplaceAll(prompt, "'", "'\\''")
-		agentCmd = agentCmd + " -p '" + escaped + "'"
+		batchPromptEnv = prompt
+		agentCmd = agentCmd + " -p \"$TCV_BATCH_PROMPT\""
 	}
 
 	// Use resolved session type as agent type
@@ -1226,14 +1224,6 @@ func startSessionWithType(sessionType, projectDir, projectName, cmdOverride, env
 		}
 	}
 
-	// Auto-mount ~/gt for gastown sessions
-	if resolvedSessionType == "gastown" || strings.Contains(sessionCfg.Image, "gastown") {
-		gtHome := filepath.Join(homeDir, "gt")
-		if fileExists(gtHome) {
-			volumeArgs = append(volumeArgs, "-v", gtHome+":/home/agent/gt:rw")
-		}
-	}
-
 	// Get git config for author info
 	gitAuthorName := getGitConfig("user.name", "Claude Code")
 	gitAuthorEmail := getGitConfig("user.email", "claude@agent.local")
@@ -1268,6 +1258,11 @@ func startSessionWithType(sessionType, projectDir, projectName, cmdOverride, env
 		"-e", "TCV_PROJECT_PATH=" + absDir,
 		"-e", "TCV_BRANCH=" + gitBranch,
 	)
+
+	// Add batch prompt as env var (avoids shell injection from prompt content)
+	if batchPromptEnv != "" {
+		envArgs = append(envArgs, "-e", "TCV_BATCH_PROMPT="+batchPromptEnv)
+	}
 
 	// Add extra env vars
 	for _, e := range extraEnv {
@@ -1925,7 +1920,7 @@ func logsCommand(args []string) error {
 	fs.BoolVar(&follow, "f", false, "Follow log output (shorthand)")
 	fs.IntVar(&tail, "tail", 100, "Number of lines to show from end of log")
 	fs.IntVar(&tail, "n", 100, "Number of lines to show (shorthand)")
-	fs.StringVar(&sessionLogDir, "session-log-dir", "/tmp/agent-sessions", "Directory for session output logs")
+	fs.StringVar(&sessionLogDir, "session-log-dir", "", "Directory for session output logs (default: latest session in project)")
 
 	if err := fs.Parse(args); err != nil {
 		return err
@@ -1941,11 +1936,29 @@ func logsCommand(args []string) error {
 		return err
 	}
 
-	// Look for output.log in session log directory
-	logPath := filepath.Join(sessionLogDir, "output.log")
+	// Find output.log: explicit session-log-dir, or latest session in project
+	var logPath string
+	if sessionLogDir != "" {
+		logPath = filepath.Join(sessionLogDir, "output.log")
+	} else {
+		// Find the most recent session directory with an output.log
+		sessionsDir := getProjectSessionsDir(absDir)
+		entries, _ := os.ReadDir(sessionsDir)
+		var latestTime time.Time
+		for _, e := range entries {
+			if !e.IsDir() {
+				continue
+			}
+			candidate := filepath.Join(sessionsDir, e.Name(), "output.log")
+			if info, err := os.Stat(candidate); err == nil && info.ModTime().After(latestTime) {
+				latestTime = info.ModTime()
+				logPath = candidate
+			}
+		}
+	}
 
-	if !fileExists(logPath) {
-		return fmt.Errorf("log file not found: %s", logPath)
+	if logPath == "" || !fileExists(logPath) {
+		return fmt.Errorf("no session logs found in %s", absDir)
 	}
 
 	// Build tail command
@@ -2191,7 +2204,6 @@ func initCommand(args []string) error {
 		noPrompt     bool
 		localDomains string
 		localPorts   string
-		initGastown  bool
 	)
 
 	fs.StringVar(&projectDir, "project-dir", ".", "Path to project directory")
@@ -2206,7 +2218,6 @@ func initCommand(args []string) error {
 	fs.BoolVar(&noPrompt, "y", false, "Skip interactive image selection (shorthand)")
 	fs.StringVar(&localDomains, "local-domains", "", "Comma-separated local domains (e.g., myapp.local,api.myapp.local)")
 	fs.StringVar(&localPorts, "local-ports", "", "Comma-separated local ports (e.g., 8000,5173)")
-	fs.BoolVar(&initGastown, "gastown", false, "Initialize gastown multi-agent workspace in .gastown/")
 
 	if err := fs.Parse(args); err != nil {
 		return err
@@ -2293,31 +2304,6 @@ func initCommand(args []string) error {
 		addToGitignore(gitignorePath, ".container_id")
 	}
 
-	// Initialize gastown workspace if requested
-	gastownInitialized := false
-	if initGastown {
-		gastownDir := filepath.Join(absDir, ".gastown")
-		if fileExists(filepath.Join(gastownDir, "mayor", "town.json")) && !force {
-			fmt.Fprintf(os.Stderr, "gastown workspace already exists at %s\n", gastownDir)
-		} else {
-			fmt.Printf("Initializing gastown workspace at %s...\n", gastownDir)
-			// Run gt install
-			cmd := exec.Command("gt", "install", ".gastown", "--git")
-			cmd.Dir = absDir
-			cmd.Stdout = os.Stdout
-			cmd.Stderr = os.Stderr
-			if err := cmd.Run(); err != nil {
-				fmt.Fprintf(os.Stderr, "Warning: gastown init failed: %v\n", err)
-			} else {
-				gastownInitialized = true
-				// Add .gastown to gitignore
-				if fileExists(gitignorePath) {
-					addToGitignore(gitignorePath, ".gastown/")
-				}
-			}
-		}
-	}
-
 	return writeJSON(resultRecord{
 		Timestamp:  time.Now().UTC(),
 		Type:       "init",
@@ -2331,7 +2317,6 @@ func initCommand(args []string) error {
 			"image_type":          imageType,
 			"local_domains":       domains,
 			"local_ports":         ports,
-			"gastown_initialized": gastownInitialized,
 		},
 	})
 }
@@ -2366,7 +2351,7 @@ func detectProjectType(dir string) (string, string) {
 				return "go-nuxt", "agent-go-nuxt-vcs"
 			}
 		}
-		return "go", "agent-java-go-vcs"
+		return "go", "tcv-agent-base"
 	}
 	if fileExists(filepath.Join(dir, "package.json")) {
 		pkgData, _ := os.ReadFile(filepath.Join(dir, "package.json"))
@@ -2382,7 +2367,7 @@ func detectProjectType(dir string) (string, string) {
 		return "tofu", "agent-tofu-vcs"
 	}
 
-	return "generic", "agent-php-vcs"
+	return "generic", "tcv-agent-base"
 }
 
 func generatePolicy(projectName, projectType, imageType string, localDomains []string, localPorts []int) map[string]interface{} {
@@ -2410,11 +2395,6 @@ func generatePolicy(projectName, projectType, imageType string, localDomains []s
 				"image":   imageType,
 				"command": "codex",
 				"args":    []string{"--full-auto"},
-			},
-			"gastown": map[string]interface{}{
-				"image":   "agent-gastown",
-				"command": "gt",
-				"args":    []string{"worker"},
 			},
 		},
 		"env_allow": []string{
@@ -2860,15 +2840,28 @@ func ensurePolicyVolume(ctx context.Context) error {
 	return createCmd.Run()
 }
 
+func sanitizePolicyName(projectName string) string {
+	// Use only the base name and strip anything that isn't alphanumeric, dash, or underscore
+	base := filepath.Base(projectName)
+	var safe strings.Builder
+	for _, r := range base {
+		if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') || r == '-' || r == '_' || r == '.' {
+			safe.WriteRune(r)
+		}
+	}
+	if safe.Len() == 0 {
+		return "default"
+	}
+	return safe.String()
+}
+
 func addPolicyToProxy(policyPath, projectName string) error {
 	ctx := context.Background()
-	policyName := projectName + ".json"
+	policyName := sanitizePolicyName(projectName) + ".json"
 
-	// Copy policy file to volume using a temporary container
-	cmd := exec.CommandContext(ctx, getContainerRuntime(), "run", "--rm",
-		"-v", policyVolumeName+":/dest:rw",
-		"-v", policyPath+":/src/policy.json:ro",
-		"busybox", "sh", "-c", fmt.Sprintf("cp /src/policy.json /dest/%s", policyName))
+	// Copy policy file to proxy volume
+	cmd := exec.CommandContext(ctx, getContainerRuntime(), "cp",
+		policyPath, proxyContainerName+":/policy/"+policyName)
 	if err := cmd.Run(); err != nil {
 		return fmt.Errorf("failed to copy policy: %w", err)
 	}
@@ -2880,12 +2873,11 @@ func addPolicyToProxy(policyPath, projectName string) error {
 
 func removePolicyFromProxy(projectName string) {
 	ctx := context.Background()
-	policyName := projectName + ".json"
+	policyName := sanitizePolicyName(projectName) + ".json"
 
-	// Remove policy file from volume
-	cmd := exec.CommandContext(ctx, getContainerRuntime(), "run", "--rm",
-		"-v", policyVolumeName+":/dest:rw",
-		"busybox", "sh", "-c", fmt.Sprintf("rm -f /dest/%s", policyName))
+	// Remove policy file from proxy container
+	cmd := exec.CommandContext(ctx, getContainerRuntime(), "exec",
+		proxyContainerName, "rm", "-f", "/policy/"+policyName)
 	cmd.Run()
 
 	// Reload proxy if running
@@ -3117,14 +3109,7 @@ func resolveAgentCommand(policy *policyConfig, agentName, cmdOverride string) (s
 		names = append(names, name)
 	}
 	if len(names) > 0 {
-		// Sort for deterministic behavior
-		for i := 0; i < len(names)-1; i++ {
-			for j := i + 1; j < len(names); j++ {
-				if names[j] < names[i] {
-					names[i], names[j] = names[j], names[i]
-				}
-			}
-		}
+		sort.Strings(names)
 		return buildAgentCommand(policy.Agents[names[0]]), nil
 	}
 
@@ -3289,28 +3274,6 @@ func cleanupOldSessions(projectDir string) {
 	}
 }
 
-func resolveScriptPath(envKey, name string) string {
-	if v := os.Getenv(envKey); v != "" {
-		return v
-	}
-	if path, err := exec.LookPath(name); err == nil {
-		return path
-	}
-	exe, err := os.Executable()
-	if err == nil {
-		search := []string{
-			filepath.Join(filepath.Dir(exe), "..", name),
-			filepath.Join(filepath.Dir(exe), name),
-		}
-		for _, candidate := range search {
-			if fileExists(candidate) {
-				return candidate
-			}
-		}
-	}
-	return name
-}
-
 // getProxyPort returns the configured proxy port (default 8080)
 func getProxyPort() string {
 	if port := os.Getenv("TCV_PROXY_PORT"); port != "" {
@@ -3417,7 +3380,7 @@ Usage: tcv <command> [options] [project-dir]
 Session Commands:
   claude [dir]         Start Claude session (recommended)
   codex [dir]          Start Codex session
-  gastown [dir]        Start Gastown multi-agent session
+  gemini [dir]         Start Gemini session
 
 Management Commands:
   stop [dir]           Stop containers for the project (graceful)
@@ -3435,7 +3398,7 @@ Setup Commands:
   build [images]       Build container images from images/ and images-custom/
 
 Legacy Commands (deprecated):
-  start [session] [dir]  Start session (use claude/codex/gastown instead)
+  start [session] [dir]  Start session (use claude/codex/gemini instead)
 
 Session Options:
   -d, --project-dir      Path to project directory (default: current dir)
@@ -3476,7 +3439,7 @@ Examples:
   tcv init ~/projects/myapp       # Initialize specific project
   tcv claude                      # Start Claude in current directory
   tcv claude ~/projects/myapp     # Start Claude in myproject
-  tcv gastown                     # Start Gastown multi-agent session
+  tcv gemini                      # Start Gemini session
   tcv codex ./myproject           # Start Codex in myproject
   tcv logs -f                     # Follow session logs
   tcv attach                      # Attach to tmux session (for debugging)

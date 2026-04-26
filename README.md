@@ -7,7 +7,7 @@ Run AI coding agents (Claude Code, Codex, Gemini) in sandboxed containers with n
 ## Quick Start
 
 ```bash
-git clone https://github.com/yourusername/tcv.git
+git clone https://github.com/jkbrlw/tcv.git
 cd tcv
 make install        # Build + install to /usr/local/bin
 make build-base     # Build the base agent container image
@@ -54,7 +54,7 @@ You also need at least one API key, set in your shell profile or an env file:
 ### From Source
 
 ```bash
-git clone https://github.com/yourusername/tcv.git
+git clone https://github.com/jkbrlw/tcv.git
 cd tcv
 make install
 ```

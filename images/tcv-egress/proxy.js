@@ -253,7 +253,7 @@ server.on('connect', (req, clientSocket, head) => {
     return;
   }
 
-  const serverSocket = require('net').connect(port, hostname, () => {
+  const serverSocket = net.connect(port, hostname, () => {
     clientSocket.write('HTTP/1.1 200 Connection Established\r\n\r\n');
     serverSocket.write(head);
     serverSocket.pipe(clientSocket);
@@ -285,9 +285,22 @@ const reloadServer = http.createServer((req, res) => {
     }
   } else if (req.url === '/update-baseline' && req.method === 'POST') {
     // Update baseline policy from POST body and reload
+    const MAX_BODY = 1024 * 1024; // 1MB limit
     let body = '';
-    req.on('data', chunk => { body += chunk; });
+    let tooBig = false;
+    req.on('data', chunk => {
+      body += chunk;
+      if (body.length > MAX_BODY) {
+        tooBig = true;
+        req.destroy();
+      }
+    });
     req.on('end', () => {
+      if (tooBig) {
+        res.writeHead(413, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ success: false, error: 'Body too large' }));
+        return;
+      }
       try {
         // Validate JSON
         const policy = JSON.parse(body);

@@ -88,43 +88,6 @@ RUN cp /usr/bin/git /usr/bin/git.bin && \
 'exec /usr/bin/git.bin "$cmd" "$@"' > /usr/bin/git && chmod +x /usr/bin/git
 
 # =============================================================================
-# NPM wrapper - block heavy commands, direct to npm-host MCP tool
-# =============================================================================
-RUN mv /usr/bin/npm /usr/bin/npm.bin && \
-    printf '%s\n' '#!/usr/bin/env bash' \
-'# Blocked npm scripts - these should use the npm-host MCP tool' \
-'BLOCKED_SCRIPTS="build dev start test preview generate typecheck check"' \
-'' \
-'if [ "$1" = "run" ] || [ "$1" = "run-script" ]; then' \
-'  script="$2"' \
-'  for blocked in $BLOCKED_SCRIPTS; do' \
-'    if [ "$script" = "$blocked" ]; then' \
-'      echo "" >&2' \
-'      echo "[blocked] npm run $script is disabled in this container due to memory limits" >&2' \
-'      echo "" >&2' \
-'      echo "Use the npm-host MCP tool instead:" >&2' \
-'      echo "  Tool: npm_run" >&2' \
-'      echo "  Args: { \"project\": \"$(basename $PWD)\", \"script\": \"$script\" }" >&2' \
-'      echo "" >&2' \
-'      exit 1' \
-'    fi' \
-'  done' \
-'fi' \
-'' \
-'if [ "$1" = "test" ]; then' \
-'  echo "" >&2' \
-'  echo "[blocked] npm test is disabled in this container due to memory limits" >&2' \
-'  echo "" >&2' \
-'  echo "Use the npm-host MCP tool instead:" >&2' \
-'  echo "  Tool: npm_test" >&2' \
-'  echo "  Args: { \"project\": \"$(basename $PWD)\" }" >&2' \
-'  echo "" >&2' \
-'  exit 1' \
-'fi' \
-'' \
-'exec /usr/bin/npm.bin "$@"' > /usr/bin/npm && chmod +x /usr/bin/npm
-
-# =============================================================================
 # Terminal title helper - updates window title with project @ branch
 # Writes to all writable /dev/pts/* to bypass Claude Code's output capture
 # =============================================================================
